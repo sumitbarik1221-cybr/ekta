@@ -7,6 +7,9 @@ The migration files are split by feature so changes can be reviewed and troubles
 - `20261023020000_gem_ratings.sql` — gem ratings.
 - `20261023030000_trip_checklists.sql` — per-user trip checklist.
 - `20261024000000_auth_login_lockout.sql` — hashed-email failed-login tracking and lockout.
+- `20261024010000_community_gem_suggestions_and_rating_summary.sql` — moderated hidden-gem suggestions and a read-only aggregate rating view.
+
+The community-gem migration is additive. Apply it to the connected Supabase project before publishing the app update; it adds the suggestion table and an aggregate view while keeping the existing account, review, and rating tables intact.
 
 The four `20261023...` files replace an older, un-applied migration that expected `place_reviews` and `itineraries` and assumed a `status` column on `gem_ratings`. The live project instead has `reviews`, `trip_checklists`, and a `gem_ratings` table without `status`. App data tables were empty when this baseline was reconciled; Auth accounts were preserved.
 

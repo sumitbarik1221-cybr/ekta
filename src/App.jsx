@@ -15,6 +15,8 @@ import { SourceLink } from './components/common.jsx';
 import { AssistantPanel, BudgetPanel, ItineraryPanel } from './components/ToolPanels.jsx';
 import AuthPage from './auth/AuthPage.jsx';
 import { useAuth } from './auth/AuthContext.jsx';
+import { supabase } from './lib/supabase.js';
+import CommunityPanel from './components/CommunityPanel.jsx';
 import './auth/nav.css';
 
 
@@ -29,6 +31,7 @@ function App(){
  useEffect(()=>{if(passwordRecovery){setAuthMode('reset');setAuthError('')}},[passwordRecovery]);
  const [query,setQuery]=useState(''); const [guide,setGuide]=useState(null); const [aiSeed,setAiSeed]=useState(null); const [live,setLive]=useState({status:'idle',items:[],key:null}); const [selectedSpot,setSelectedSpot]=useState(null); const [located,setLocated]=useState({key:null,map:{}}); const [weatherState,setWeatherState]=useState({status:'idle'}); const [budgetStyle,setBudgetStyle]=useState('balanced'); const [recents,setRecents]=useState(()=>{try{return JSON.parse(localStorage.getItem('ekta-recent')||'[]')}catch{return[]}}); const ctrlRef=useRef(null); const reqRef=useRef(0); const guideKeyRef=useRef(null); const [locating,setLocating]=useState(false); const [searching,setSearching]=useState(false); const [searchError,setSearchError]=useState(''); const [saved,setSaved]=useState(()=>JSON.parse(localStorage.getItem('ekta-saved')||'[]')); const [dark,setDark]=useState(false); const [menu,setMenu]=useState(false); const [feature,setFeature]=useState(null); const [toast,setToast]=useState(''); const [nearby,setNearby]=useState([]); const [nearbyLoading,setNearbyLoading]=useState(false); const [currentCoords,setCurrentCoords]=useState(null); const [currentLocationLabel,setCurrentLocationLabel]=useState(''); const [aiQuestion,setAiQuestion]=useState(''); const [aiAnswer,setAiAnswer]=useState(''); const [budget,setBudget]=useState({days:3,amount:12000,style:'balanced',startDate:new Date().toISOString().slice(0,10),endDate:new Date(Date.now()+2*86400000).toISOString().slice(0,10)}); const [interests,setInterests]=useState(['Culture','Food']); const [itinerary,setItinerary]=useState(null); const [language,setLanguage]=useState('hi'); const [phrase,setPhrase]=useState('Where is the nearest hospital?'); const [translated,setTranslated]=useState(''); const [translating,setTranslating]=useState(false); const [review,setReview]=useState(''); const [reviews,setReviews]=useState(()=>JSON.parse(localStorage.getItem('ekta-reviews')||'[]')); const [photo,setPhoto]=useState(null); const [photoResult,setPhotoResult]=useState(''); const [crowd,setCrowd]=useState(''); const [checklist,setChecklist]=useState([]); const [tripNote,setTripNote]=useState('');
  const [showHiddenGems,setShowHiddenGems]=useState(false);
+ const [dbGems,setDbGems]=useState([]);
  const [gemSelections,setGemSelections]=useState(()=>{try{return JSON.parse(localStorage.getItem('ekta-gem-map-selection-v1')||'{}')}catch{return{}}});
  useEffect(()=>{localStorage.setItem('ekta-saved',JSON.stringify(saved))},[saved]);
  useEffect(()=>{try{localStorage.setItem('ekta-gem-map-selection-v1',JSON.stringify(gemSelections))}catch{/* Browser storage may be unavailable. */}},[gemSelections]);
@@ -57,6 +60,29 @@ function App(){
   return()=>observer.disconnect();
  },[]);
  useEffect(()=>{localStorage.setItem('ekta-reviews',JSON.stringify(reviews))},[reviews]);useEffect(()=>{if(toast){const t=setTimeout(()=>setToast(''),3000);return()=>clearTimeout(t)}},[toast]);
+ useEffect(()=>{
+  let active=true;
+  if(!supabase||!guide){setDbGems([]);return()=>{active=false}};
+  supabase.from('gem_suggestions')
+   .select('id,name,description,latitude,longitude,ai_checked,ai_passed,admin_approved,status')
+   .eq('destination_key',guide.key)
+   .in('status',['possible','user_verified','admin_approved','verified_all'])
+   .then(({data,error})=>{
+    if(!active)return;
+    if(error){setDbGems([]);return}
+    setDbGems((data||[]).map(row=>({
+     name:row.name,note:row.description,kind:'community hidden gem',place:guide.title,
+     hidden:true,source:'EKTA community suggestion',
+     ...(Number.isFinite(row.latitude)&&Number.isFinite(row.longitude)?{lat:row.latitude,lon:row.longitude,hasCoords:true}:{}),
+     verification:{
+      aiChecked:row.ai_checked,aiPassed:row.ai_passed,
+      userVerified:row.status==='user_verified'||row.status==='verified_all',
+      adminApproved:row.admin_approved||row.status==='admin_approved'||row.status==='verified_all'
+     }
+    })));
+   });
+  return()=>{active=false};
+ },[guide?.key]);
  const place=guide?toPlace(guide):destinations[0];
  const remember=name=>setRecents(prev=>{const n=[name,...prev.filter(x=>x.toLowerCase()!==name.toLowerCase())].slice(0,6);try{localStorage.setItem('ekta-recent',JSON.stringify(n))}catch{}return n});
  // Every search gets a token; only the newest request may update the page (prevents stale results).
@@ -90,7 +116,7 @@ function App(){
   }catch{setToast('Map lookup is unavailable right now.')}
   finally{gemLookupRef.current.delete(`${key}::${a.name}`)}
  }
- const attractions=useMemo(()=>{if(!guide)return [];const wide=guide.record?.tier==='starter'&&guide.scope!=='exact';const editorial=wide?[]:(guide.record?.attractions||[]);const curatedGems=(guide.curated?.gems||[]).map(name=>({name,kind:'hidden gem',place:guide.title,hidden:true,source:'EKTA curated destination notes'}));const base=mergeAttractions([...editorial,...curatedGems],live.key===guide.key?live.items:[]);const loc=located.key===guide.key?located.map:{};return base.map(a=>loc[a.name]&&!a.hasCoords?{...a,...loc[a.name],hasCoords:true,precision:'approx'}:a)},[guide,live,located]);
+ const attractions=useMemo(()=>{if(!guide)return [];const wide=guide.record?.tier==='starter'&&guide.scope!=='exact';const editorial=wide?[]:(guide.record?.attractions||[]);const curatedGems=(guide.curated?.gems||[]).map(name=>({name,kind:'hidden gem',place:guide.title,hidden:true,source:'EKTA curated destination notes'}));const base=mergeAttractions([...editorial,...curatedGems,...dbGems],live.key===guide.key?live.items:[]);const loc=located.key===guide.key?located.map:{};return base.map(a=>loc[a.name]&&!a.hasCoords?{...a,...loc[a.name],hasCoords:true,precision:'approx'}:a)},[guide,live,located,dbGems]);
  const hiddenGemKey=name=>String(name||'').normalize('NFKC').trim().toLocaleLowerCase();
  const isHiddenGemChecked=a=>gemSelections[`${guide?.key}::${hiddenGemKey(a.name)}`]??true;
  function toggleHiddenGem(a,checked){setGemSelections(previous=>({...previous,[`${guide?.key}::${hiddenGemKey(a.name)}`]:checked}));if(!checked&&selectedSpot?.name===a.name)setSelectedSpot(null);if(checked&&showHiddenGems&&!a.hasCoords)locateSpot(a,{select:false})}
@@ -280,7 +306,7 @@ function App(){
   </div>
   </div>
   {guide.image?<small className="ek-small">Photo: {guide.image.pageUrl?<a href={guide.image.pageUrl} target="_blank" rel="noreferrer">{guide.image.credit}</a>:guide.image.credit}{guide.image.pageUrl?'. Open the source page for photo details and license.':'. The image comes from the article for this place and may not show it at its best.'}</small>:<small className="ek-small">No openly licensed photo was found for this place, so none is shown.</small>}
-  <DestinationGuide guide={guide} attractions={attractions} attractionsStatus={live.key===guide.key?live.status:'loading'} selected={selectedSpot} onSelect={setSelectedSpot} onLocate={locateSpot} isHiddenGemChecked={isHiddenGemChecked} onToggleHiddenGem={toggleHiddenGem} budgetStyle={budgetStyle} setBudgetStyle={setBudgetStyle} onSwitch={n=>{setQuery(n);searchPlace(null,n)}} onAsk={q=>{setAiSeed({q,n:Date.now()});openFeature(15)}}/>
+  <DestinationGuide guide={guide} attractions={attractions} attractionsStatus={live.key===guide.key?live.status:'loading'} selected={selectedSpot} onSelect={setSelectedSpot} onLocate={locateSpot} isHiddenGemChecked={isHiddenGemChecked} onToggleHiddenGem={toggleHiddenGem} budgetStyle={budgetStyle} setBudgetStyle={setBudgetStyle} onSwitch={n=>{setQuery(n);searchPlace(null,n)}} onAsk={q=>{setAiSeed({q,n:Date.now()});openFeature(15)}} user={user} supabase={supabase}/>
   </div>
   <aside className="detail-side">
   <div className="map-panel">
@@ -376,7 +402,7 @@ function App(){
   <h2>Travel leaves a mark.<br/>
   <em>Make it a good one.</em>
   </h2>
-  <p>Written reviews and place suggestions are reserved for account holders. Sign-in is not connected yet, so submissions are not open in this prototype.</p>
+  <p>Account holders can share reviews and hidden-gem suggestions. Community submissions are stored securely and reviewed before publication.</p>
   <button className="primary-button" onClick={()=>openFeature(21)}>Share a local note <ArrowRight size={16}/>
   </button>
   </div>
@@ -405,7 +431,7 @@ function App(){
   </span>
   </div>
   </footer>
-  {feature!==null&&<FeatureModal index={feature} place={place} guide={guide} aiSeed={aiSeed} attractions={attractions} saved={saved} toggleSave={toggleSave} onClose={()=>setFeature(null)} language={language} setLanguage={setLanguage} phrase={phrase} setPhrase={setPhrase} translated={translated} translating={translating} translateText={translateText} review={review} setReview={setReview} reviews={reviews} submitReview={submitReview} photo={photo} photoResult={photoResult} identifyPhoto={identifyPhoto} crowd={crowd} setCrowd={setCrowd} checklist={checklist} setChecklist={setChecklist} tripNote={tripNote} setTripNote={setTripNote} toast={setToast}/>}
+  {feature!==null&&<FeatureModal index={feature} place={place} guide={guide} user={user} onSignIn={()=>{setFeature(null);setAuthMode('signin')}} aiSeed={aiSeed} attractions={attractions} saved={saved} toggleSave={toggleSave} onClose={()=>setFeature(null)} language={language} setLanguage={setLanguage} phrase={phrase} setPhrase={setPhrase} translated={translated} translating={translating} translateText={translateText} review={review} setReview={setReview} reviews={reviews} submitReview={submitReview} photo={photo} photoResult={photoResult} identifyPhoto={identifyPhoto} crowd={crowd} setCrowd={setCrowd} checklist={checklist} setChecklist={setChecklist} tripNote={tripNote} setTripNote={setTripNote} toast={setToast}/>}
   {toast&&<div className="toast">
   <CheckCircle2 size={17}/>{toast}</div>}
  </div>
@@ -440,7 +466,7 @@ function FeatureModal(p){const {index,place,onClose}=p;const [sosName,setSosName
  case 18:return <><div className="modal-callout"><LocateFixed/><div><b>Discover places near your current location</b><p>Your browser will ask for permission. EKTA only uses the coordinates in this session to open a nearby map search.</p></div></div><button className="primary-button" onClick={()=>{if(!navigator.geolocation){p.toast('Geolocation not supported.');return}setLoading(true);navigator.geolocation.getCurrentPosition(pos=>{setLoading(false);window.open(`https://www.openstreetmap.org/#map=14/${pos.coords.latitude}/${pos.coords.longitude}`,'_blank','noopener');},()=>{setLoading(false);p.toast('Location permission denied or unavailable.')},{timeout:10000})}} disabled={loading}>{loading?'Waiting for permission…':<><LocateFixed size={16}/> Use my location</>}</button><small className="source-note">Browser location works on localhost or HTTPS. Location is not continuously tracked.</small></>;
  case 19:return p.guide?<BudgetPanel guide={p.guide}/>:<p className="muted">Search for or choose a destination first to estimate its costs.</p>;
  case 20:return <><p>Responsible travel score uses a transparent self-check, not an environmental certification.</p>{[['local','Support local businesses (25%)'],['refill','Carry/refill reusable water bottle (25%)'],['transit','Use shared/public transport where practical (25%)'],['waste','Avoid litter and respect nature/heritage (25%)']].map(([k,label])=><label className="check-row" key={k}><input type="checkbox" checked={!!score[k]} onChange={e=>setScore({...score,[k]:e.target.checked})}/><span>{label}</span></label>)}<div className="score-circle"><strong>{Math.round(Object.values(score).filter(Boolean).length/4*100)}</strong><span>/100</span></div><p className="muted">Self-assessed score based on selected actions. Not independently audited.</p></>;
- case 21:return <><div className="modal-callout"><Star/><div><b>Written reviews require an account</b><p>Only account holders can post written reviews. Guests may rate a place, but sign-in, review moderation and shared storage are not connected yet.</p></div></div><label className="field-label">Review for {place.name}</label><textarea rows="4" disabled placeholder="Sign in to write a review"/><button className="primary-button" type="button" disabled>Sign-in is not connected yet <Send size={15}/></button><small className="source-note">Ratings entered in the hidden-gem section are saved only in this browser and do not affect shared verification.</small></>;
+ case 21:return <CommunityPanel place={place} guide={p.guide} user={p.user} onSignIn={p.onSignIn} toast={p.toast}/>;
  case 22:return <><h4>Your saved places</h4>{p.saved.length?p.saved.map(s=><div className="saved-row" key={s.name}><label className="saved-select" title={`Select ${s.name} to share`}><input type="checkbox" checked={shareSelection.has(s.name)} onChange={()=>toggleShareSelection(s.name)} aria-label={`Select ${s.name} to share`}/></label><img src={s.image||place.image} alt=""/><div><b>{s.name}</b><small>{s.state}</small></div><button aria-label={`Remove ${s.name} from saved places`} onClick={()=>p.toggleSave(s)}><X size={16}/></button></div>):<p className="muted">No saved places yet. Tap the heart on a destination card to save it.</p>}{p.tripNote.trim()&&<label className="check-row share-checklist"><input type="checkbox" checked={shareChecklist} onChange={e=>setShareChecklist(e.target.checked)}/><span>Include my saved trip checklist note</span></label>}<div className="saved-share-actions"><a className={`secondary-button${!shareMessage?' is-disabled':''}`} href={shareMessage?`https://wa.me/?text=${encodeURIComponent(shareMessage)}`:undefined} target="_blank" rel="noreferrer" aria-disabled={!shareMessage} onClick={e=>{if(!shareMessage)e.preventDefault()}}><Share2 size={15}/> WhatsApp</a><a className={`secondary-button${!shareMessage?' is-disabled':''}`} href={shareMessage?`sms:?body=${encodeURIComponent(shareMessage)}`:undefined} aria-disabled={!shareMessage} onClick={e=>{if(!shareMessage)e.preventDefault()}}><Send size={15}/> SMS</a></div><small className="source-note">Choose the saved places to include. WhatsApp or your device’s messaging app opens with a draft; you review and send it yourself.</small><label className="field-label">Trip checklist note</label><textarea rows="3" value={p.tripNote} onChange={e=>p.setTripNote(e.target.value)} placeholder="Tickets, medicines, refill bottle, local guide…"/><button className="secondary-button" onClick={()=>{localStorage.setItem('ekta-trip-checklist',p.tripNote);p.toast('Trip checklist saved locally.')}}>Save checklist <CheckCircle2 size={15}/></button></>;
  case 23:return <><div className="modal-callout"><Wifi/><div><b>Save {place.name} for offline reference</b><p>This stores a small text snapshot in your browser. Maps, images and live weather still need internet. Full offline mode requires a service worker/PWA setup.</p></div></div><button className="primary-button" onClick={saveOffline}>{offlineSaved?'Update offline snapshot':'Save offline snapshot'} <Bookmark size={16}/></button>{offlineSaved&&<div className="translation-result"><small>AVAILABLE LOCALLY</small><p>{place.name}: {place.description}</p><p>Best time: {place.best}</p><p>Local tip: {place.customs}</p></div>}<small className="source-note">Stored in this browser’s localStorage, not a cloud account.</small></>;
  case 24:return <><div className="photo-upload"><Camera size={28}/><b>Photo-based place discovery</b><p>Select a photo of a monument, craft or dish to begin. Actual AI identification needs a configured vision model/API.</p><label className="upload-button">Choose a photo<input type="file" accept="image/*" onChange={e=>p.identifyPhoto(e.target.files?.[0])}/></label>{p.photo&&<img className="photo-preview" src={p.photo} alt="Selected upload"/>}{p.photoResult&&<p className="photo-result">{p.photoResult}</p>}</div><small className="source-note">Your selected photo is previewed locally; it is not uploaded to a server by this demo.</small></>;

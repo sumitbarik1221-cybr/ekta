@@ -93,7 +93,7 @@ function Budget({ guide, style, setStyle }) {
     <p className="ek-muted">No sourced cost estimate for {name}{r?.type === 'country' ? ' (costs are in a local currency EKTA has no sourced figures for)' : ''}. EKTA will not guess one.</p></article>;
 }
 
-export default function DestinationGuide({ guide, attractions, attractionsStatus, selected, onSelect, onLocate, isHiddenGemChecked, onToggleHiddenGem, budgetStyle, setBudgetStyle, onSwitch, onAsk }) {
+export default function DestinationGuide({ guide, attractions, attractionsStatus, selected, onSelect, onLocate, isHiddenGemChecked, onToggleHiddenGem, budgetStyle, setBudgetStyle, onSwitch, onAsk, user, supabase }) {
   const r = guide.record, name = guide.title;
   const [open, setOpen] = useState(false);
   useEffect(() => setOpen(false), [guide.key]);
@@ -158,7 +158,7 @@ export default function DestinationGuide({ guide, attractions, attractionsStatus
         {wideOnly && r.stories?.length > 0 && <details className="ek-details"><summary>{r.name}-wide starter notes (about the state, not about {name})</summary>{r.stories.map((s, i) => <p className="ek-small" key={i}>• {s.text}</p>)}</details>}
 
         <h3><MapPin /> Attractions &amp; hidden gems</h3>
-        <AttractionList attractions={attractions} status={attractionsStatus} selected={selected} onSelect={onSelect} onLocate={onLocate} guide={guide} isHiddenGemChecked={isHiddenGemChecked} onToggleHiddenGem={onToggleHiddenGem} onAsk={onAsk} />
+        <AttractionList attractions={attractions} status={attractionsStatus} selected={selected} onSelect={onSelect} onLocate={onLocate} guide={guide} isHiddenGemChecked={isHiddenGemChecked} onToggleHiddenGem={onToggleHiddenGem} onAsk={onAsk} user={user} supabase={supabase} />
 
         <h3><Utensils /> Local food in {name}</h3>
         <FoodExplorer guide={guide} onAsk={onAsk} />
@@ -180,14 +180,47 @@ export default function DestinationGuide({ guide, attractions, attractionsStatus
   );
 }
 
-function AttractionList({ attractions, status, selected, onSelect, onLocate, guide, isHiddenGemChecked, onToggleHiddenGem, onAsk }) {
+function AttractionList({ attractions, status, selected, onSelect, onLocate, guide, isHiddenGemChecked, onToggleHiddenGem, onAsk, user, supabase }) {
   const name = guide.title;
   const gems = attractions.filter(a => a.hidden);
   const rest = attractions.filter(a => !a.hidden);
   const [ratings, setRatings] = useState(() => { try { return JSON.parse(localStorage.getItem('ekta-gem-ratings-v1') || '{}'); } catch { return {}; } });
+  const [sharedRatings, setSharedRatings] = useState({});
+  const [myRatings, setMyRatings] = useState({});
   useEffect(() => { try { localStorage.setItem('ekta-gem-ratings-v1', JSON.stringify(ratings)); } catch { /* Browser storage may be unavailable. */ } }, [ratings]);
   const ratingKey = a => `${guide.key}::${String(a.name).normalize('NFKC').trim().toLocaleLowerCase()}`;
-  const rate = (a, value) => setRatings(previous => ({ ...previous, [ratingKey(a)]: value }));
+  const gemKey = a => String(a.name).normalize('NFKC').trim().toLocaleLowerCase();
+  useEffect(() => {
+    let active = true;
+    if (!supabase) { setSharedRatings({}); setMyRatings({}); return () => { active = false; }; }
+    supabase.from('gem_rating_summary').select('gem_key,rating_count,average_rating').eq('place_key', guide.key)
+      .then(({ data }) => {
+        if (!active) return;
+        setSharedRatings(Object.fromEntries((data || []).map(row => [row.gem_key, row])));
+      });
+    if (!user) { setMyRatings({}); return () => { active = false; }; }
+    supabase.from('gem_ratings').select('gem_key,rating').eq('place_key', guide.key).eq('user_id', user.id)
+      .then(({ data }) => {
+        if (!active) return;
+        setMyRatings(Object.fromEntries((data || []).map(row => [row.gem_key, row.rating])));
+      });
+    return () => { active = false; };
+  }, [guide.key, supabase, user?.id]);
+  const rate = async (a, value) => {
+    setRatings(previous => ({ ...previous, [ratingKey(a)]: value }));
+    if (!user || !supabase) return;
+    const key = gemKey(a);
+    setMyRatings(previous => ({ ...previous, [key]: value }));
+    const { error } = await supabase.from('gem_ratings').upsert({
+      user_id: user.id, place_key: guide.key, gem_key: key, rating: value
+    }, { onConflict: 'user_id,place_key,gem_key' });
+    if (error) {
+      setMyRatings(previous => ({ ...previous, [key]: 0 }));
+      return;
+    }
+    const { data } = await supabase.from('gem_rating_summary').select('gem_key,rating_count,average_rating').eq('place_key', guide.key);
+    setSharedRatings(Object.fromEntries((data || []).map(row => [row.gem_key, row])));
+  };
   const statusMsg = status === 'loading' ? 'Loading live attractions…'
     : status === 'not-configured' ? 'Google Places is not configured. Add a restricted Google Maps key to .env; showing EKTA records and nearby Wikipedia articles.'
     : status === 'unavailable' ? 'Google Places could not be reached. Check the key, enabled APIs, billing and network. Showing EKTA records and nearby Wikipedia articles.' : '';
@@ -196,8 +229,9 @@ function AttractionList({ attractions, status, selected, onSelect, onLocate, gui
     {status !== 'loading' && <LimitedData title="No attractions found" name={name} topic="things to do" onAsk={onAsk && (() => onAsk(`Check the available EKTA, Wikipedia and Wikivoyage context for attractions and lesser-known places in ${name}. Do not claim places are verified unless the context supports them; identify any unsupported ideas as unverified suggestions.`))} missing={`No attractions with verified data were found for ${name}. Source coverage is incomplete, so this does not mean there is nothing to see.`} />}
   </>;
   const Row = a => {
-    const evidence = getGemVerification(a.verification);
-    const myRating = ratings[ratingKey(a)] || 0;
+    const stats = sharedRatings[gemKey(a)];
+    const evidence = getGemVerification({ ...a.verification, ratingCount: stats?.rating_count || 0, averageRating: stats?.average_rating || 0 });
+    const myRating = user ? (myRatings[gemKey(a)] || 0) : (ratings[ratingKey(a)] || 0);
     return <li key={`${a.name}|${a.source}`} className={selected?.name === a.name ? 'on' : ''}>
       <div className="ek-attraction-main"><b>{a.name}</b><small>{[a.kind, a.place].filter(Boolean).join(' · ')}</small>{a.note && <p>{a.note}</p>}
         <span className="ek-src">{a.source}{a.precision === 'approx' ? ' · approx. position' : ''}</span></div>
@@ -212,10 +246,10 @@ function AttractionList({ attractions, status, selected, onSelect, onLocate, gui
           {evidence.fullyVerified && <strong className="ek-gem-all-verified"><BadgeCheck size={14}/> Verified by all</strong>}
           {evidence.aiPassed && !evidence.userVerified && <small className="ek-gem-stage">Possible location · AI content-screened, not fact-verified</small>}
         </div>
-        <div className="ek-gem-rating"><span>Guest rating (this browser only):</span><div role="group" aria-label={`Rate ${a.name}`}>
+        <div className="ek-gem-rating"><span>{user ? 'Community rating:' : 'Guest rating (this browser only):'}</span><div role="group" aria-label={`Rate ${a.name}`}>
           {[1, 2, 3, 4, 5].map(value => <button type="button" key={value} onClick={() => rate(a, value)} aria-label={`${value} star${value === 1 ? '' : 's'}`} aria-pressed={myRating === value} className={myRating >= value ? 'is-rated' : ''}><Star size={15} fill={myRating >= value ? 'currentColor' : 'none'} /></button>)}
-        </div>{myRating > 0 && <small>Your {myRating}-star rating is saved on this device; shared ratings need an account/database service.</small>}</div>
-        <p className="ek-gem-review-note">Written reviews are for account holders only. Sign-in is not connected yet.</p>
+        </div>{myRating > 0 && <small>{user ? `Your ${myRating}-star rating is saved to your account.` : `Your ${myRating}-star rating is saved on this device. Sign in to contribute to shared ratings.`}</small>}{stats?.rating_count > 0 && <small>{stats.rating_count} shared rating{stats.rating_count === 1 ? '' : 's'} · {Number(stats.average_rating).toFixed(1)}/5 average</small>}</div>
+        <p className="ek-gem-review-note">Written reviews and new hidden-gem suggestions are available in the Community section.</p>
       </div>}
     </li>;
   };
@@ -224,7 +258,7 @@ function AttractionList({ attractions, status, selected, onSelect, onLocate, gui
     {gems.length > 0 && <><h4 className="ek-sub">Hidden gems (from EKTA’s record)</h4><ul className="ek-attr">{gems.map(Row)}</ul></>}
     {rest.length > 0 && <><h4 className="ek-sub">{gems.length ? 'Other attractions' : 'Attractions'}</h4><ul className="ek-attr">{rest.slice(0, 30).map(Row)}</ul></>}
     <p className="ek-small">Lists combine EKTA records, Google Places (when configured) and Wikipedia. None is guaranteed complete — confirm opening times and access with official sources.</p>
-    {gems.length > 0 && <p className="ek-small">Verification policy preview: AI checks content quality only; it does not prove a place is factually safe or real. User verification requires at least {GEM_USER_VERIFY_MIN_RATINGS} ratings with an average of {GEM_USER_VERIFY_MIN_AVERAGE}+ stars. Admin approval remains separate. This is a prototype rule; shared ratings and admin actions need accounts and a database.</p>}
+    {gems.length > 0 && <p className="ek-small">Verification policy preview: AI checks content quality only; it does not prove a place is factually safe or real. User verification requires at least {GEM_USER_VERIFY_MIN_RATINGS} ratings with an average of {GEM_USER_VERIFY_MIN_AVERAGE}+ stars. Admin approval remains separate.</p>}
   </>;
 }
 
