@@ -1,0 +1,13 @@
+project_id = "ekta-tourism"
+
+[auth.email]
+enable_signup = true
+enable_confirmations = true
+otp_length = 6
+otp_expiry = 300
+
+[functions.cleanup-unverified-users]
+verify_jwt = false
+
+[functions.guarded-sign-in]
+verify_jwt = false
