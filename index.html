@@ -10,6 +10,26 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@500;600;700&display=swap" rel="stylesheet">
     <script src="//code.tidio.co/aaqdrmknnpvddksil5elt8cr8senbip0.js" async></script>
+    <script>
+      (function () {
+        let closeHandlerAttached = false;
+        function onTidioReady() {
+          const api = window.tidioChatApi;
+          if (!api) return;
+          api.hide();
+          if (!closeHandlerAttached) {
+            api.on('close', function () { api.hide(); });
+            closeHandlerAttached = true;
+          }
+        }
+        if (window.tidioChatApi) {
+          window.tidioChatApi.on('ready', onTidioReady);
+          if (window.tidioChatApi.getStatus() !== null) onTidioReady();
+        } else {
+          document.addEventListener('tidioChat-ready', onTidioReady, { once: true });
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

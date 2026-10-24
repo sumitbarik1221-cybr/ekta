@@ -1,92 +1,55 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Bot, Send, CalendarDays, Printer, Copy, RefreshCw, Trash2, AlertTriangle } from 'lucide-react';
-import { askAssistant, rulesBasedAnswer } from '../services/assistant.js';
+import { Bot, CalendarDays, Printer, Copy, Trash2, AlertTriangle } from 'lucide-react';
 import { generateItinerary, itineraryToText, validateDates, estimateTrip } from '../services/itinerary.js';
 import { COST_LABELS } from '../data/regions/helpers.js';
 import { Badge } from './common.jsx';
 
 const inr = n => '₹' + Math.round(n).toLocaleString('en-IN');
 
-function cleanAiText(value) {
-  return String(value || '')
-    .replace(/\\([*_`])/g, '$1')
-    .replace(/&#x20;|&nbsp;/gi, ' ')
-    .replace(/&#39;/g, "'")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&')
-    .replace(/\u00a0/g, ' ');
-}
-
-function renderAiInline(text, sources) {
-  const pattern = /(\*\*.+?\*\*|\*[^*]+\*|`[^`]+`|\[[^\]]+\]\(https?:\/\/[^)\s]+\)|【\d+†L\d+(?:-L?\d+)?】)/g;
-  return text.split(pattern).filter(Boolean).map((part, index) => {
-    if (part.startsWith('**') && part.endsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith('*') && part.endsWith('*')) return <em key={index}>{part.slice(1, -1)}</em>;
-    if (part.startsWith('`') && part.endsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
-    const link = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
-    if (link) return <a key={index} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a>;
-    const citation = part.match(/^【(\d+)†L\d+(?:-L?\d+)?】$/);
-    if (citation) {
-      const source = sources[Number(citation[1]) - 1];
-      return source ? <a key={index} href={source.url} target="_blank" rel="noreferrer" aria-label={`Open source ${citation[1]}`} className="ai-inline-citation">[{citation[1]}]</a> : <sup key={index}>[{citation[1]}]</sup>;
-    }
-    return <React.Fragment key={index}>{part}</React.Fragment>;
-  });
-}
-
-function AssistantAnswer({ text, sources = [] }) {
-  const lines = cleanAiText(text).split('\n');
-  const blocks = [];
-  let list = [];
-  const flushList = () => {
-    if (list.length) { blocks.push(<ul key={`list-${blocks.length}`}>{list}</ul>); list = []; }
-  };
-  lines.forEach((line, index) => {
-    const bullet = line.match(/^\s*(?:[*•-])\s+(.+)$/);
-    if (bullet) { list.push(<li key={`item-${index}`}>{renderAiInline(bullet[1], sources)}</li>); return; }
-    flushList();
-    if (line.trim()) blocks.push(<p key={`line-${index}`}>{renderAiInline(line.trim(), sources)}</p>);
-  });
-  flushList();
-  return <div className="ai-answer-copy">{blocks}</div>;
-}
-
 export function AssistantPanel({ guide, seed }) {
-  const [q, setQ] = useState('');
-  const [webCheck, setWebCheck] = useState(false);
-  const [state, setState] = useState({ status: 'idle' });
-  const ctrl = useRef(null);
-  useEffect(() => { setState({ status: 'idle' }); return () => ctrl.current?.abort(); }, [guide?.key]);
-  const ask = async (question, useWeb = webCheck) => {
-    if (!question.trim()) return;
-    ctrl.current?.abort(); ctrl.current = new AbortController();
-    setState({ status: 'loading', question });
-    const r = await askAssistant({ question, guide, signal: ctrl.current.signal, webSearch: useWeb });
-    if (ctrl.current.signal.aborted) return;
-    if (r.ok) setState({ status: 'ai', question, answer: r.answer, model: r.model, sources: r.sources, webSearch: r.webSearch });
-    else if (r.reason === 'error') setState({ status: 'error', question, message: r.message });
-    else setState({ status: 'fallback', question, reason: r.reason, answer: rulesBasedAnswer(question, guide) });
+  const [opening, setOpening] = useState(false);
+  const [copyState, setCopyState] = useState('');
+  const timer = useRef(null);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  const copyQuestion = async () => {
+    try {
+      await navigator.clipboard.writeText(seed.q);
+      setCopyState('Question copied. Paste it into the Tidio chat.');
+    } catch {
+      setCopyState('Copy was blocked by the browser. Select the question above and copy it manually.');
+    }
   };
-  useEffect(() => {
-    if (!seed?.q) return;
-    setQ(seed.q);
-    setWebCheck(true);
-    ask(seed.q, true);
-  }, [seed?.n]);
+
+  const openChat = () => {
+    const api = window.tidioChatApi;
+    if (api && api.getStatus() !== null) {
+      api.show();
+      api.open();
+      return;
+    }
+    setOpening(true);
+    const handleReady = () => {
+      window.clearTimeout(timer.current);
+      const readyApi = window.tidioChatApi;
+      if (readyApi) { readyApi.show(); readyApi.open(); }
+      else setOpening(false);
+    };
+    document.addEventListener('tidioChat-ready', handleReady, { once: true });
+    timer.current = window.setTimeout(() => {
+      document.removeEventListener('tidioChat-ready', handleReady);
+      setOpening(false);
+    }, 10000);
+  };
+
   return <>
-    <div className="ai-context"><span><Bot size={17} /> CONTEXT: {guide.title}{guide.subtitle ? `, ${guide.subtitle}` : ''}</span>
-      <p>Ask about food, seasons, etiquette, attractions or emergency numbers. For missing results, EKTA can search the web and show sources. AI research is a suggestion, not factual or admin verification.</p></div>
-    <div className="quick-prompts">{['What local food should I try?', 'What is the best season?', 'What etiquette should I follow?', 'What are the emergency numbers?'].map(x => <button key={x} type="button" onClick={() => { setQ(x); ask(x); }}>{x}</button>)}</div>
-    <form className="ai-form" onSubmit={e => { e.preventDefault(); ask(q); }}>
-      <input value={q} onChange={e => setQ(e.target.value)} maxLength={600} placeholder={`Ask about ${guide.title}…`} aria-label="Your question" />
-      <button type="submit" aria-label="Send" disabled={state.status === 'loading'}><Send size={17} /></button>
-    </form>
-    <label className="check-row ai-web-check"><input type="checkbox" checked={webCheck} onChange={e => setWebCheck(e.target.checked)} /><span>Search current web sources (uses Groq browser search and your API usage limits)</span></label>
-    {state.status === 'loading' && <p className="ek-muted" role="status">Thinking…</p>}
-    {state.status === 'error' && <div className="ai-answer" role="alert"><AlertTriangle size={19} /><div><p>{state.message || 'The AI service returned an error. No answer was generated.'}</p><button type="button" className="secondary-button" onClick={() => ask(state.question)}><RefreshCw size={14} /> Retry</button></div></div>}
-    {state.status === 'ai' && <div className="ai-answer"><Bot size={19} /><div><Badge tone="amber">{state.webSearch ? 'AI web research · admin review required' : 'AI suggestion · unverified'} · {state.model || 'model'}</Badge><AssistantAnswer text={state.answer} sources={state.sources} />{state.sources?.length > 0 && <div className="ai-citations"><b>Sources found</b>{state.sources.map(source => <a key={source.url} href={source.url} target="_blank" rel="noreferrer">{source.title}<span>{source.url}</span></a>)}</div>}<small className="source-note">Web sources provide evidence to review; AI cannot establish factual truth or grant EKTA verification/admin approval. Check the cited pages before accepting a suggestion.</small></div></div>}
-    {state.status === 'fallback' && <div className="ai-answer"><Bot size={19} /><div><Badge tone="amber">Not from an AI model — offline helper</Badge><p>{state.answer}</p>
-      <small className="source-note">{state.reason === 'not-configured' ? 'The backend is running but no Groq key is configured.' : 'The EKTA backend could not be reached.'} Start it with <code>npm.cmd run server</code> and set <code>GROQ_API_KEY</code> in .env (see README).</small></div></div>}
+    <div className="ai-context"><span><Bot size={17} /> DESTINATION CONTEXT: {guide.title}{guide.subtitle ? `, ${guide.subtitle}` : ''}</span>
+      <p>Open EKTA’s Tidio chat to ask about food, seasons, etiquette, attractions or trip ideas for this destination. Tidio’s availability and automated replies depend on the chat settings in your Tidio account. Mention the destination in your message so the Tidio assistant has the right context.</p></div>
+    {seed?.q && <div className="modal-callout"><Bot size={18} /><div><b>Suggested question</b><p>{seed.q}</p><button className="secondary-button" type="button" onClick={copyQuestion}><Copy size={14} /> Copy question</button>{copyState && <small role="status">{copyState}</small>}</div></div>}
+    <button className="primary-button" type="button" onClick={openChat} disabled={opening}>
+      <Bot size={17} /> {opening ? 'Connecting to Tidio…' : 'Chat with the EKTA Travel Guide'}
+    </button>
+    <small className="source-note">Tidio may show an offline message when no operator or automation is available. Confirm important travel and emergency details with reliable sources.</small>
   </>;
 }
 
